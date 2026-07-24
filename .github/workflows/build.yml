@@ -1,0 +1,77 @@
+name: build-vcam-zygisk
+
+# Same shape as your zygisk-scb workflow: the dev PC has no local NDK/CMake, so the
+# whole native build runs here. Push to main (or trigger manually) and grab the
+# "vcam-zygisk" artifact zip; pushing a v* tag also cuts a Release.
+#
+# NOTE: this milestone builds the PLUMBING module (camera_hook.cpp is a stub), so it
+# does NOT fetch ShadowHook/LSPlant yet. When we write the real ImageReader hook we
+# add the LSPlant + inline-hook fetch below (see the commented block).
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # for the tag-triggered Release step
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- NEXT STEP (camera hook) will add, matching zygisk-scb: ---
+      # - name: Fetch LSPlant + ShadowHook
+      #   run: |
+      #     git clone --depth 1 -b v6.4 https://github.com/LSPosed/LSPlant external/lsplant
+      #     git clone --depth 1 -b v2.0.1 https://github.com/bytedance/android-inline-hook external/shadowhook
+
+      - name: Set up Android NDK r27c
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          local-cache: false
+
+      - name: Configure (arm64-v8a, API 31, c++_static)
+        run: >
+          cmake -S module/jni -B build
+          -G "Unix Makefiles"
+          -DCMAKE_TOOLCHAIN_FILE="${{ steps.ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake"
+          -DANDROID_ABI=arm64-v8a
+          -DANDROID_PLATFORM=android-31
+          -DANDROID_STL=c++_static
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Show .so + verify the zygisk entry points are exported
+        run: |
+          ls -l build/libvcam.so
+          READELF="$(echo "${{ steps.ndk.outputs.ndk-path }}"/toolchains/llvm/prebuilt/*/bin/llvm-readelf)"
+          "$READELF" -dW build/libvcam.so | grep -E 'NEEDED|SONAME' || true
+          echo "--- exported dynamic symbols (should be just the two zygisk_*_entry) ---"
+          "$READELF" --dyn-syms build/libvcam.so | grep -E 'zygisk_(module|companion)_entry' \
+            || { echo "!! zygisk entry points not exported — module would not load"; exit 1; }
+
+      - name: Assemble flashable module zip
+        run: bash scripts/package.sh build/libvcam.so
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcam-zygisk
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - name: Release (on v* tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
