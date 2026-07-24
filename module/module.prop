@@ -1,0 +1,6 @@
+id=vcam_inhouse
+name=VCAM In-House (Zygisk camera test injector)
+version=v0.1
+versionCode=1
+author=PwC Cyber (Bho)
+description=Authorised-engagement in-house camera-frame injector for FaceTec liveness control-validation. Replaces a target app's Camera2 frames with an operator RTMP feed (via PC ffmpeg bridge). Lab/engagement use only.
